@@ -3,13 +3,13 @@ const { test, expect } = require('@playwright/test');
 const BASE_URL = 'https://kenazperfumes.com';
 const TIMEOUT = 30000;
 
-// Helper: get first visible product URL from collection page
+// Known product URLs from the site — avoids relying on collection page scraping
+const KNOWN_PRODUCT = `${BASE_URL}/products/bayda-100ml`;
+
 async function getFirstProductUrl(page) {
   await page.goto(`${BASE_URL}/collections/all`, { waitUntil: 'domcontentloaded', timeout: TIMEOUT })
     .catch(() => page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT }));
   await page.waitForTimeout(2000);
-
-  // Get all visible product links, pick first one
   const links = await page.locator('a[href*="/products/"]:visible').all();
   for (const link of links) {
     const href = await link.getAttribute('href').catch(() => null);
@@ -17,7 +17,7 @@ async function getFirstProductUrl(page) {
       return href.startsWith('http') ? href : `${BASE_URL}${href}`;
     }
   }
-  return null;
+  return KNOWN_PRODUCT;
 }
 
 test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
@@ -43,11 +43,7 @@ test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
 
   // ─── 3. Collection page loads ─────────────────────────────────────────
   test('Collection/Shop page loads with products', async ({ page }) => {
-    const collectionUrls = [
-      `${BASE_URL}/collections/all`,
-      `${BASE_URL}/collections`,
-      `${BASE_URL}/shop`,
-    ];
+    const collectionUrls = [`${BASE_URL}/collections/all`, `${BASE_URL}/collections/all-products`];
     let loaded = false;
     for (const url of collectionUrls) {
       const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT }).catch(() => null);
@@ -55,51 +51,53 @@ test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
     }
     expect(loaded, 'No collection/shop page found').toBe(true);
     await page.waitForTimeout(2000);
-    const count = await page.locator('.product-card, .product-item, .product, [class*="product"], .card, article').count();
-    expect(count, 'No product cards found').toBeGreaterThan(0);
-    console.log(`✅ Collection page loaded with ${count} products`);
+    const count = await page.locator('a[href*="/products/"]').count();
+    expect(count, 'No product links found on collection page').toBeGreaterThan(0);
+    console.log(`✅ Collection page has ${count} product links`);
   });
 
   // ─── 4. Product page loads ────────────────────────────────────────────
   test('Product page loads with Add to Cart button', async ({ page }) => {
-    const productUrl = await getFirstProductUrl(page);
-    expect(productUrl, 'Could not find any product URL').toBeTruthy();
-    console.log(`  → Navigating to: ${productUrl}`);
-
-    // Navigate with a fresh goto — no networkidle, just domcontentloaded
-    const response = await page.goto(productUrl, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
+    console.log(`  → Navigating to: ${KNOWN_PRODUCT}`);
+    const response = await page.goto(KNOWN_PRODUCT, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     expect(response.status()).toBeLessThan(400);
-
-    // Wait for page to settle without networkidle
     await page.waitForTimeout(2000);
-
     expect(page.url()).toContain('/products/');
 
-    const productTitle = page.locator('h1').first();
-    await expect(productTitle).toBeVisible({ timeout: TIMEOUT });
+    // Target product title specifically — inside the product info section, not nav drawer
+    // Shopify product title is inside #ProductInfo or .product__title or .product-single__title
+    const productTitle = page.locator([
+      '#ProductInfo-template--22576074096888__main h1',
+      '.product__title',
+      '.product-single__title',
+      '[class*="product"] h1',
+      'main h1',
+    ].join(', ')).first();
 
-    const price = page.locator('[class*="price"], .price, [data-price]').first();
+    await expect(productTitle).toBeVisible({ timeout: TIMEOUT });
+    const titleText = await productTitle.innerText();
+    console.log(`  → Product title: "${titleText}"`);
+    expect(titleText.trim().length).toBeGreaterThan(0);
+
+    const price = page.locator('main [class*="price"]:visible, .product__price:visible, [data-price]:visible').first();
     await expect(price).toBeVisible({ timeout: TIMEOUT });
 
     const addToCart = page.locator(
-      'button[name="add"], button:has-text("Add to cart"), button:has-text("Add to Cart"), [class*="add-to-cart"]'
+      'button[name="add"]:visible, button:has-text("Add to cart"):visible, button:has-text("Add to Cart"):visible'
     ).first();
     await expect(addToCart).toBeVisible({ timeout: TIMEOUT });
     await expect(addToCart).toBeEnabled({ timeout: TIMEOUT });
 
-    console.log(`✅ Product page OK — "${await productTitle.innerText()}" | Add to Cart visible`);
+    console.log(`✅ Product page OK — "${titleText}" | Add to Cart visible`);
   });
 
   // ─── 5. Add to Cart works ─────────────────────────────────────────────
   test('Add to Cart functionality works', async ({ page }) => {
-    const productUrl = await getFirstProductUrl(page);
-    expect(productUrl, 'Could not find any product URL').toBeTruthy();
-
-    await page.goto(productUrl, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
+    await page.goto(KNOWN_PRODUCT, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     await page.waitForTimeout(2000);
 
     const addToCart = page.locator(
-      'button[name="add"], button:has-text("Add to cart"), button:has-text("Add to Cart"), [class*="add-to-cart"]'
+      'button[name="add"]:visible, button:has-text("Add to cart"):visible, button:has-text("Add to Cart"):visible'
     ).first();
     await expect(addToCart).toBeVisible({ timeout: TIMEOUT });
     await addToCart.click();
@@ -126,14 +124,11 @@ test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
 
   // ─── 7. Checkout reachable ────────────────────────────────────────────
   test('Checkout is reachable', async ({ page }) => {
-    const productUrl = await getFirstProductUrl(page);
-    expect(productUrl, 'Could not find any product URL').toBeTruthy();
-
-    await page.goto(productUrl, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
+    await page.goto(KNOWN_PRODUCT, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     await page.waitForTimeout(2000);
 
     const addToCart = page.locator(
-      'button[name="add"], button:has-text("Add to cart"), button:has-text("Add to Cart"), [class*="add-to-cart"]'
+      'button[name="add"]:visible, button:has-text("Add to cart"):visible, button:has-text("Add to Cart"):visible'
     ).first();
     await expect(addToCart).toBeVisible({ timeout: TIMEOUT });
     await addToCart.click();
@@ -160,11 +155,9 @@ test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
   test('No critical JS errors on homepage', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (err) => errors.push(err.message));
-
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     await page.waitForTimeout(3000);
 
-    // Filter out known third-party / Shopify non-critical errors
     const criticalErrors = errors.filter(e =>
       !e.includes('analytics') &&
       !e.includes('gtag') &&
@@ -174,13 +167,11 @@ test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
       !e.includes('tiktok') &&
       !e.includes('pixel') &&
       !e.includes('shopify_pay') &&
-      !e.includes('marketingAllowed') &&   // Shopify cookie consent — not critical
-      !e.includes('Cannot read properties of undefined') // Usually third-party scripts
+      !e.includes('marketingAllowed') &&
+      !e.includes('Cannot read properties of undefined')
     );
 
-    if (criticalErrors.length > 0) {
-      console.warn('⚠️  JS Errors:', criticalErrors);
-    }
+    if (criticalErrors.length > 0) console.warn('⚠️  JS Errors:', criticalErrors);
     expect(criticalErrors.length, `Critical JS errors: ${criticalErrors.join(', ')}`).toBe(0);
     console.log('✅ No critical JS errors on homepage');
   });
