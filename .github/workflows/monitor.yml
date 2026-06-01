@@ -1,0 +1,94 @@
+name: 🕐 Kenaz Website Monitor
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # Every hour at :00
+  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+
+jobs:
+  monitor:
+    name: Run Website Flow Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout repo ──────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node ─────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install dependencies ───────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 4. Install Playwright browsers ───────────────────────────────
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      # ── 5. Run tests ──────────────────────────────────────────────────
+      - name: Run Kenaz flow tests
+        id: run_tests
+        run: npx playwright test --reporter=list,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: results.json
+        continue-on-error: true   # Don't fail job here — we handle below
+
+      # ── 6. Upload HTML report as artifact ─────────────────────────────
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_number }}
+          path: playwright-report/
+          retention-days: 7
+
+      # ── 7. Send failure email ─────────────────────────────────────────
+      - name: Send failure email
+        if: steps.run_tests.outcome == 'failure'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "🚨 Kenaz Website Issue Detected — ${{ github.run_number }}"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: Kenaz Monitor <${{ secrets.MAIL_USERNAME }}>
+          body: |
+            ⚠️  One or more checks FAILED on kenazperfumes.com
+
+            Run #:     ${{ github.run_number }}
+            Time:      ${{ github.event.head_commit.timestamp || 'Scheduled run' }}
+            Triggered: ${{ github.event_name }}
+
+            ──────────────────────────────────────
+            What was being checked:
+            • Homepage loads (status 200)
+            • Navigation menu visible
+            • Collection/Shop page + products
+            • Product page + price + Add to Cart button
+            • Add to Cart functionality
+            • Cart page accessible
+            • Checkout reachable
+            • Search works
+            • No critical JS errors
+            • Page loads within 10 seconds
+
+            ──────────────────────────────────────
+            📋 Full report (HTML):
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please investigate immediately — your store may be losing orders.
+
+            — Kenaz Automated Monitor
+
+      # ── 8. Fail job if tests failed (so GitHub shows red ✗) ──────────
+      - name: Mark job as failed if tests failed
+        if: steps.run_tests.outcome == 'failure'
+        run: exit 1
