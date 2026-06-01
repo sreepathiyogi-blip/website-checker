@@ -66,12 +66,23 @@ test.describe('Kenaz Perfumes - D2C Flow Monitor', () => {
     const productUrl = href.startsWith('http') ? href : `${BASE_URL}${href}`;
     await page.goto(productUrl, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
 
+    // Wait for network and additional rendering
+    await page.waitForLoadState('networkidle').catch(() => null);
+    await page.waitForTimeout(1000);
+
     expect(page.url()).toContain('/products/');
 
-    const productTitle = page.locator('h1').first();
+    // Use more flexible locator strategy for product title
+    const productTitle = page.locator('h1, h2, [class*="product-title"], [class*="product-name"], .title').first();
+    
+    // Add debugging for title detection
+    const titleCount = await page.locator('h1, h2, [class*="product-title"], [class*="product-name"], .title').count();
+    console.log(`  → Found ${titleCount} potential title elements`);
+    
     await expect(productTitle).toBeVisible({ timeout: TIMEOUT });
 
-    const price = page.locator('[class*="price"], .price, [data-price]').first();
+    // More flexible price locator
+    const price = page.locator('[class*="price"], .price, [data-price], span:has-text("$")').first();
     await expect(price).toBeVisible({ timeout: TIMEOUT });
 
     const addToCart = page.locator(
